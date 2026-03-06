@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.8"
+# dependencies = [
+#   "sdbus>=0.14.0",
+#   "asyncinotify>=4.0.2"
+# ]
+# ///
 
 import logging
 import os
