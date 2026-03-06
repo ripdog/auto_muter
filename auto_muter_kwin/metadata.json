@@ -1,0 +1,23 @@
+{
+    "KPackageStructure": "KWin/Script",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "your@email.com",
+                "Name": "Your Name"
+            }
+        ],
+        "Category": "Accessibility",
+        "Description": "Sends focused window PID to a helper service for managing audio.",
+        "EnabledByDefault": true,
+        "Icon": "preferences-desktop-effects",
+        "Id": "mute_unfocused_event_sender",
+        "License": "GPL",
+        "Name": "Mute Unfocused Event Sender",
+        "Version": "0.9",
+        "Website": ""
+    },
+    "X-KDE-PluginInfo-Readonly": false,
+    "X-Plasma-API": "javascript",
+    "X-Plasma-MainScript": "contents/code/main.js"
+}
