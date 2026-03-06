@@ -4,7 +4,7 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/uv run /usr/bin/focus_audio_manager
+ExecStart=/usr/bin/uv run --script /usr/bin/focus_audio_manager
 Restart=on-failure
 RestartSec=5
 
