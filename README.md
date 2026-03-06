@@ -47,9 +47,9 @@ uv run focus_audio_manager.py
 
 ### 3. Setup Systemd User Service (Recommended)
 
-To run the Python service automatically in the background, set up a systemd user service.
+To run the Python service automatically in the background, set up a systemd user service. 
 
-Create a file at `~/.config/systemd/user/focus_audio_manager.service`:
+If you installed via the PKGBUILD, the unit file is already installed to `/usr/lib/systemd/user/focus-audio-manager.service`. Otherwise, create a file at `~/.config/systemd/user/focus-audio-manager.service`:
 
 ```ini
 [Unit]
@@ -71,7 +71,7 @@ WantedBy=default.target
 Enable and start the service:
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now focus_audio_manager.service
+systemctl --user enable --now focus-audio-manager.service
 ```
 
 ## Configuration

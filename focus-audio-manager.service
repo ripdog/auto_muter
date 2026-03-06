@@ -1,0 +1,12 @@
+[Unit]
+Description=Focus-based Application Audio Manager (sdbus/pactl)
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/uv run /usr/bin/focus_audio_manager
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
