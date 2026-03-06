@@ -1,11 +1,4 @@
-#!/usr/bin/env python
-# /// script
-# requires-python = ">=3.8"
-# dependencies = [
-#   "sdbus>=0.14.0",
-#   "asyncinotify>=4.0.2"
-# ]
-# ///
+#!/usr/bin/env python3
 
 import logging
 import os
@@ -30,20 +23,7 @@ def get_config_path() -> str:
 
 def load_config() -> dict:
     config_path = get_config_path()
-    default_config = {
-        "configured_process_names": [
-            "Star Rail",
-            "Wuthering Waves",
-            "TVP(KIRIKIRI) Z core / Scripting Platform for Win32",
-            " cs2",
-            "UmamusumePrettyDerby.exe",
-            "Sakuna.exe",
-            "Siglus",
-            "BGI.exe",
-            "HeavenBurnsRed.exe",
-            "ZenlessZoneZero.exe",
-        ]
-    }
+    default_config = {"configured_process_names": []}
 
     try:
         os.makedirs(os.path.dirname(config_path), exist_ok=True)

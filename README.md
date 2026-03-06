@@ -33,16 +33,13 @@ After installing, enable the script in KDE System Settings -> Window Management 
 
 ### 2. Setup the Python Service
 
-The Python script uses PEP 723 inline script metadata to manage its dependencies (`sdbus` and `asyncinotify`). It is recommended to run it using `uv`.
+The Python service requires `python`, `python-sdbus`, and `python-asyncinotify`. On Arch Linux, these can be installed from the official repositories and the AUR.
 
-Ensure you have `uv` installed:
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+If you install via the included `PKGBUILD`, dependencies are handled automatically.
 
 You can test the script by running it directly:
 ```bash
-uv run focus_audio_manager.py
+python focus_audio_manager.py
 ```
 
 ### 3. Setup Systemd User Service (Recommended)
@@ -58,7 +55,7 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env uv run %h/.local/bin/auto_muter/focus_audio_manager.py
+ExecStart=/usr/bin/focus_audio_manager
 Restart=on-failure
 RestartSec=5
 
@@ -76,15 +73,13 @@ systemctl --user enable --now focus-audio-manager.service
 
 ## Configuration
 
-The Python daemon automatically generates a configuration file at `~/.config/auto_muter/config.json` on its first run.
+The Python daemon automatically generates an empty configuration file at `~/.config/auto_muter/config.json` on its first run.
 
 ```json
 {
     "configured_process_names": [
-        "Star Rail",
-        "Wuthering Waves",
-        " cs2",
-        "ZenlessZoneZero.exe"
+        "MyGame.exe",
+        "some-other-app"
     ]
 }
 ```
