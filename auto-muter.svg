@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="256" height="256">
+  <!-- Circular background -->
+  <circle cx="12" cy="12" r="11" fill="#2c3e50" />
+  
+  <!-- Speaker Body -->
+  <polygon points="10 7 6 10 3 10 3 14 6 14 10 17 10 7" fill="#ecf0f1" />
+  
+  <!-- Mute Cross -->
+  <g stroke="#e74c3c" stroke-width="2" stroke-linecap="round">
+    <line x1="14" y1="9" x2="20" y2="15" />
+    <line x1="20" y1="9" x2="14" y2="15" />
+  </g>
+</svg>

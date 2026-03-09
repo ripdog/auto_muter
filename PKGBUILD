@@ -1,12 +1,12 @@
 # Maintainer: ripdog
 pkgname=auto-muter-git
-pkgver=r6.d7ce40d
+pkgver=r7.d80cae8
 pkgrel=1
 pkgdesc="Auto mutes specific applications when they lose focus"
 arch=('any')
 url="https://github.com/ripdog/auto_muter"
 license=('MIT')
-depends=('python' 'python-sdbus' 'python-asyncinotify' 'libpulse')
+depends=('python' 'python-sdbus' 'python-asyncinotify' 'libpulse' 'pyside6')
 makedepends=('git')
 provides=('auto-muter')
 conflicts=('auto-muter')
@@ -21,6 +21,13 @@ pkgver() {
 package() {
   # Install the Python service script
   install -Dm755 "$startdir/focus_audio_manager.py" "$pkgdir/usr/bin/focus_audio_manager"
+  
+  # Install the Config GUI
+  install -Dm755 "$startdir/config_gui.py" "$pkgdir/usr/bin/auto_muter_config"
+  
+  # Install the Desktop file and Icon
+  install -Dm644 "$startdir/auto-muter.desktop" "$pkgdir/usr/share/applications/auto-muter.desktop"
+  install -Dm644 "$startdir/auto-muter.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/auto-muter.svg"
   
   # Install the KWin script system-wide
   install -d "$pkgdir/usr/share/kwin/scripts/auto_muter_kwin"

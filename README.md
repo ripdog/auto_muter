@@ -94,7 +94,11 @@ systemctl --user enable --now focus-audio-manager.service
 
 ## Configuration
 
-The Python daemon automatically generates an empty configuration file at `~/.config/auto_muter/config.json` on its first run.
+You can configure the applications to be muted using the included GUI:
+- Launch **Auto Muter Configuration** from your application launcher.
+- Add the binary names (e.g. `game.exe`) or window names of the programs you want to auto-mute.
+
+Alternatively, you can manually edit the configuration file at `~/.config/auto_muter/config.json`:
 
 ```json
 {
@@ -105,9 +109,9 @@ The Python daemon automatically generates an empty configuration file at `~/.con
 }
 ```
 
-Add the binary names or application names of the programs you want to auto-mute into the `configured_process_names` list. The matching is case-insensitive and acts as a substring match against either the binary name or the application name reported by PulseAudio.
+The matching is case-insensitive and acts as a substring match against either the binary name or the application name reported by PulseAudio.
 
-**Auto-reloading:** The daemon watches this file using `inotify`. Whenever you save changes to `config.json`, the new rules will be applied instantly without needing to restart the service.
+**Auto-reloading:** The daemon watches this file using `inotify`. Whenever you save changes to `config.json` (either manually or via the GUI), the new rules will be applied instantly without needing to restart the service.
 
 ## Troubleshooting
 

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Auto Muter Configuration
+Comment=Configure which applications auto_muter should mute
+Exec=auto_muter_config
+Icon=auto-muter
+Terminal=false
+Type=Application
+Categories=Settings;HardwareSettings;
+Keywords=Audio;Sound;Mute;Focus;
