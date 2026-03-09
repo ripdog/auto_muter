@@ -22,12 +22,12 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QLabel,
     QMessageBox,
-    QComboBox,
-    QDialog,
-    QDialogButtonBox,
+    QMenu,
+    QListWidgetItem,
+    QAbstractItemView,
 )
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import Qt, QPoint
+from PySide6.QtGui import QIcon, QAction
 
 
 def get_config_path() -> str:
@@ -72,97 +72,139 @@ def get_active_audio_apps() -> set:
     return {app for app in apps if app.lower() not in ignored_apps and app.strip()}
 
 
-class AddFromActiveDialog(QDialog):
-    def __init__(self, parent=None, active_apps=None):
+class ConfiguredListWidget(QListWidget):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Add Active Application")
-        self.setMinimumWidth(300)
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.main_app = parent
 
-        layout = QVBoxLayout(self)
+    def dragEnterEvent(self, event):
+        if event.source() and event.source() != self:
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
 
-        layout.addWidget(QLabel("Select a currently active audio application:"))
+    def dropEvent(self, event):
+        if event.source() and event.source() != self:
+            items = event.source().selectedItems()
+            for item in items:
+                if self.main_app:
+                    self.main_app.add_app_internal(item.text())  # type: ignore
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
 
-        self.app_combo = QComboBox()
-        self.app_combo.addItems(sorted(list(active_apps or set())))
-        layout.addWidget(self.app_combo)
 
-        button_box = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
-
-    def get_selected_app(self):
-        return self.app_combo.currentText()
+class ActiveListWidget(QListWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
 
 
 class AutoMuterConfigApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Auto Muter Config")
-        self.resize(400, 500)
+        self.resize(700, 500)
         self.config_path = get_config_path()
         self.config_data = {"configured_process_names": []}
 
         self.init_ui()
         self.load_config()
+        self.refresh_active_apps()
 
     def init_ui(self):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
 
-        layout = QVBoxLayout()
+        main_layout = QVBoxLayout(main_widget)
 
-        # Title
-        title_label = QLabel("Applications to Auto-Mute:")
-        title_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        layout.addWidget(title_label)
+        # Main lists area
+        lists_layout = QHBoxLayout()
 
-        # Subtitle
-        desc_label = QLabel(
-            "These applications will be muted when they lose window focus."
+        # Left side: Active Apps
+        left_layout = QVBoxLayout()
+        left_header = QHBoxLayout()
+        active_label = QLabel("Active Audio Applications:")
+        active_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self.refresh_active_apps)
+
+        left_header.addWidget(active_label)
+        left_header.addStretch()
+        left_header.addWidget(refresh_btn)
+
+        left_layout.addLayout(left_header)
+
+        left_desc = QLabel("Drag to the right or click 'Add >' to auto-mute.")
+        left_desc.setStyleSheet("color: gray;")
+        left_layout.addWidget(left_desc)
+
+        self.active_list = ActiveListWidget(self)
+        left_layout.addWidget(self.active_list)
+
+        # Middle: Transfer buttons
+        middle_layout = QVBoxLayout()
+        middle_layout.addStretch()
+
+        add_arrow_btn = QPushButton("Add >")
+        add_arrow_btn.setToolTip("Add selected active app to auto-mute list")
+        add_arrow_btn.clicked.connect(self.add_selected_active)
+        middle_layout.addWidget(add_arrow_btn)
+
+        remove_arrow_btn = QPushButton("< Remove")
+        remove_arrow_btn.setToolTip("Remove selected app from auto-mute list")
+        remove_arrow_btn.clicked.connect(self.remove_selected_configured)
+        middle_layout.addWidget(remove_arrow_btn)
+
+        middle_layout.addStretch()
+
+        # Right side: Configured Apps
+        right_layout = QVBoxLayout()
+        config_label = QLabel("Auto-Muted Applications:")
+        config_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        right_layout.addWidget(config_label)
+
+        right_desc = QLabel("Right-click an item to remove it.")
+        right_desc.setStyleSheet("color: gray;")
+        right_layout.addWidget(right_desc)
+
+        self.config_list = ConfiguredListWidget(self)
+        self.config_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
         )
-        desc_label.setStyleSheet("color: gray; margin-bottom: 5px;")
-        desc_label.setWordWrap(True)
-        layout.addWidget(desc_label)
+        self.config_list.customContextMenuRequested.connect(self.show_context_menu)
+        right_layout.addWidget(self.config_list)
 
-        # List widget
-        self.list_widget = QListWidget()
-        self.list_widget.setAlternatingRowColors(True)
-        layout.addWidget(self.list_widget)
+        lists_layout.addLayout(left_layout, 1)
+        lists_layout.addLayout(middle_layout)
+        lists_layout.addLayout(right_layout, 1)
 
-        # Add manual layout
-        add_manual_layout = QHBoxLayout()
+        main_layout.addLayout(lists_layout)
+
+        # Bottom: Manual Add
+        manual_layout = QHBoxLayout()
         self.app_input = QLineEdit()
-        self.app_input.setPlaceholderText("Enter binary or window name manually...")
+        self.app_input.setPlaceholderText("Or enter binary/window name manually...")
         self.app_input.returnPressed.connect(self.add_app_manual)
 
-        add_manual_btn = QPushButton("Add Manual")
+        add_manual_btn = QPushButton("Add Manually")
         add_manual_btn.clicked.connect(self.add_app_manual)
 
-        add_manual_layout.addWidget(self.app_input)
-        add_manual_layout.addWidget(add_manual_btn)
+        manual_layout.addWidget(self.app_input)
+        manual_layout.addWidget(add_manual_btn)
 
-        # Add from active apps button
-        add_active_btn = QPushButton("Select from currently playing audio...")
-        add_active_btn.clicked.connect(self.add_app_from_active)
-
-        layout.addWidget(add_active_btn)
-        layout.addLayout(add_manual_layout)
-
-        # Remove button
-        remove_btn = QPushButton("Remove Selected")
-        remove_btn.clicked.connect(self.remove_app)
-        layout.addWidget(remove_btn)
+        main_layout.addLayout(manual_layout)
 
         # Status label
         self.status_label = QLabel("")
         self.status_label.setStyleSheet("color: #444; font-style: italic;")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.status_label)
-
-        main_widget.setLayout(layout)
+        main_layout.addWidget(self.status_label)
 
     def load_config(self):
         try:
@@ -172,7 +214,7 @@ class AutoMuterConfigApp(QMainWindow):
             else:
                 self.config_data = {"configured_process_names": []}
 
-            self.refresh_list()
+            self.refresh_config_list()
             self.status_label.setText("Config loaded.")
         except Exception as e:
             QMessageBox.critical(
@@ -190,11 +232,30 @@ class AutoMuterConfigApp(QMainWindow):
                 self, "Error Saving Config", f"Could not save config file:\n{e}"
             )
 
-    def refresh_list(self):
-        self.list_widget.clear()
+    def refresh_config_list(self):
+        self.config_list.clear()
         names = self.config_data.get("configured_process_names", [])
         for name in names:
-            self.list_widget.addItem(name)
+            self.config_list.addItem(name)
+
+    def refresh_active_apps(self):
+        self.status_label.setText("Scanning for active audio streams...")
+        QApplication.processEvents()
+
+        self.active_list.clear()
+        active_apps = get_active_audio_apps()
+
+        configured_names = set(self.config_data.get("configured_process_names", []))
+
+        for app in sorted(list(active_apps)):
+            item = QListWidgetItem(app)
+            # Optionally gray out items already in the configured list
+            if app in configured_names:
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+                item.setToolTip("Already configured")
+            self.active_list.addItem(item)
+
+        self.status_label.setText(f"Found {len(active_apps)} active audio streams.")
 
     def add_app_internal(self, new_app: str):
         if not new_app:
@@ -203,8 +264,9 @@ class AutoMuterConfigApp(QMainWindow):
         names = self.config_data.setdefault("configured_process_names", [])
         if new_app not in names:
             names.append(new_app)
-            self.refresh_list()
+            self.refresh_config_list()
             self.save_config()
+            self.refresh_active_apps()  # Update left list to disable the added item
         else:
             self.status_label.setText(f"'{new_app}' is already in the list.")
 
@@ -214,30 +276,13 @@ class AutoMuterConfigApp(QMainWindow):
             self.add_app_internal(new_app)
             self.app_input.clear()
 
-    def add_app_from_active(self):
-        self.status_label.setText("Scanning for active audio streams...")
-        QApplication.processEvents()  # Force UI update
+    def add_selected_active(self):
+        selected_items = self.active_list.selectedItems()
+        for item in selected_items:
+            self.add_app_internal(item.text())
 
-        active_apps = get_active_audio_apps()
-        if not active_apps:
-            QMessageBox.information(
-                self,
-                "No Active Apps",
-                "No relevant currently active audio applications found.",
-            )
-            self.status_label.setText("")
-            return
-
-        dialog = AddFromActiveDialog(self, active_apps)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            selected_app = dialog.get_selected_app()
-            if selected_app:
-                self.add_app_internal(selected_app)
-        else:
-            self.status_label.setText("")
-
-    def remove_app(self):
-        selected_items = self.list_widget.selectedItems()
+    def remove_selected_configured(self):
+        selected_items = self.config_list.selectedItems()
         if not selected_items:
             return
 
@@ -247,8 +292,18 @@ class AutoMuterConfigApp(QMainWindow):
             if app_name in names:
                 names.remove(app_name)
 
-        self.refresh_list()
+        self.refresh_config_list()
         self.save_config()
+        self.refresh_active_apps()  # Re-enable the item in the left list if it's currently active
+
+    def show_context_menu(self, position: QPoint):
+        item = self.config_list.itemAt(position)
+        if item is not None:
+            menu = QMenu()
+            remove_action = QAction("Remove", self)
+            remove_action.triggered.connect(self.remove_selected_configured)
+            menu.addAction(remove_action)
+            menu.exec(self.config_list.mapToGlobal(position))
 
 
 def main():
