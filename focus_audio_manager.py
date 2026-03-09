@@ -215,8 +215,21 @@ class AudioManager(
         )
         self._run_command(["pactl", "set-sink-input-mute", stream_id, mute_command_val])
 
+    def _get_process_cgroup(self, pid: str) -> str:
+        try:
+            with open(f"/proc/{pid}/cgroup", "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("0::"):
+                        cgroup = line.strip().split("::", 1)[1]
+                        if ".service" in cgroup or ".scope" in cgroup:
+                            return cgroup
+        except Exception:
+            pass
+        return ""
+
     @dbus_method_async(input_signature="i", result_signature="")
     async def UpdateFocus(self, pid: int) -> None:
+        logger.info(f"UpdateFocus called with pid: {pid}")
         if self._current_focused_pid == pid:
             return
         self._current_focused_pid = pid
@@ -252,9 +265,21 @@ class AudioManager(
             )
 
             if is_configured_app:
-                is_stream_focused = (stream_pid == focused_pid_str) and (
-                    self._current_focused_pid != -1
-                )
+                is_stream_focused = False
+                if self._current_focused_pid != -1:
+                    if stream_pid == focused_pid_str:
+                        is_stream_focused = True
+                    else:
+                        # Check if they share the same systemd cgroup (fixes Wine/Proton games)
+                        stream_cgroup = self._get_process_cgroup(stream_pid)
+                        focused_cgroup = self._get_process_cgroup(focused_pid_str)
+                        if (
+                            stream_cgroup
+                            and focused_cgroup
+                            and stream_cgroup == focused_cgroup
+                        ):
+                            is_stream_focused = True
+
                 if is_stream_focused:
                     if stream_is_muted:
                         self._set_stream_mute(stream_id, False)
