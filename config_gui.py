@@ -9,6 +9,8 @@
 import sys
 import json
 import os
+import subprocess
+import re
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -20,6 +22,9 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QLabel,
     QMessageBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
@@ -28,6 +33,68 @@ from PySide6.QtGui import QIcon
 def get_config_path() -> str:
     xdg_config_home = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
     return os.path.join(xdg_config_home, "auto_muter", "config.json")
+
+
+def get_active_audio_apps() -> set:
+    """Fetch currently active audio applications from pactl."""
+    apps = set()
+    try:
+        result = subprocess.run(
+            ["pactl", "list", "sink-inputs"], capture_output=True, text=True, check=True
+        )
+        pactl_output = result.stdout
+
+        binary_re = re.compile(r'application\.process\.binary\s*=\s*"([^"]+)"')
+        app_name_re = re.compile(r'application\.name\s*=\s*"([^"]+)"')
+
+        for line in pactl_output.splitlines():
+            line = line.strip()
+
+            match_binary = binary_re.search(line)
+            if match_binary:
+                apps.add(match_binary.group(1))
+
+            match_app_name = app_name_re.search(line)
+            if match_app_name:
+                apps.add(match_app_name.group(1))
+
+    except Exception as e:
+        print(f"Error fetching active audio apps: {e}")
+
+    # Filter out obvious system ones that aren't useful to mute
+    ignored_apps = {
+        "kded6",
+        "plasma-workspace",
+        "pipewire",
+        "wireplumber",
+        "pulseaudio",
+    }
+    return {app for app in apps if app.lower() not in ignored_apps and app.strip()}
+
+
+class AddFromActiveDialog(QDialog):
+    def __init__(self, parent=None, active_apps=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add Active Application")
+        self.setMinimumWidth(300)
+
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel("Select a currently active audio application:"))
+
+        self.app_combo = QComboBox()
+        self.app_combo.addItems(sorted(list(active_apps or set())))
+        layout.addWidget(self.app_combo)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def get_selected_app(self):
+        return self.app_combo.currentText()
 
 
 class AutoMuterConfigApp(QMainWindow):
@@ -65,18 +132,24 @@ class AutoMuterConfigApp(QMainWindow):
         self.list_widget.setAlternatingRowColors(True)
         layout.addWidget(self.list_widget)
 
-        # Add layout
-        add_layout = QHBoxLayout()
+        # Add manual layout
+        add_manual_layout = QHBoxLayout()
         self.app_input = QLineEdit()
-        self.app_input.setPlaceholderText("Enter binary or window name...")
-        self.app_input.returnPressed.connect(self.add_app)
+        self.app_input.setPlaceholderText("Enter binary or window name manually...")
+        self.app_input.returnPressed.connect(self.add_app_manual)
 
-        add_btn = QPushButton("Add")
-        add_btn.clicked.connect(self.add_app)
+        add_manual_btn = QPushButton("Add Manual")
+        add_manual_btn.clicked.connect(self.add_app_manual)
 
-        add_layout.addWidget(self.app_input)
-        add_layout.addWidget(add_btn)
-        layout.addLayout(add_layout)
+        add_manual_layout.addWidget(self.app_input)
+        add_manual_layout.addWidget(add_manual_btn)
+
+        # Add from active apps button
+        add_active_btn = QPushButton("Select from currently playing audio...")
+        add_active_btn.clicked.connect(self.add_app_from_active)
+
+        layout.addWidget(add_active_btn)
+        layout.addLayout(add_manual_layout)
 
         # Remove button
         remove_btn = QPushButton("Remove Selected")
@@ -123,8 +196,7 @@ class AutoMuterConfigApp(QMainWindow):
         for name in names:
             self.list_widget.addItem(name)
 
-    def add_app(self):
-        new_app = self.app_input.text().strip()
+    def add_app_internal(self, new_app: str):
         if not new_app:
             return
 
@@ -133,9 +205,36 @@ class AutoMuterConfigApp(QMainWindow):
             names.append(new_app)
             self.refresh_list()
             self.save_config()
-            self.app_input.clear()
         else:
             self.status_label.setText(f"'{new_app}' is already in the list.")
+
+    def add_app_manual(self):
+        new_app = self.app_input.text().strip()
+        if new_app:
+            self.add_app_internal(new_app)
+            self.app_input.clear()
+
+    def add_app_from_active(self):
+        self.status_label.setText("Scanning for active audio streams...")
+        QApplication.processEvents()  # Force UI update
+
+        active_apps = get_active_audio_apps()
+        if not active_apps:
+            QMessageBox.information(
+                self,
+                "No Active Apps",
+                "No relevant currently active audio applications found.",
+            )
+            self.status_label.setText("")
+            return
+
+        dialog = AddFromActiveDialog(self, active_apps)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            selected_app = dialog.get_selected_app()
+            if selected_app:
+                self.add_app_internal(selected_app)
+        else:
+            self.status_label.setText("")
 
     def remove_app(self):
         selected_items = self.list_widget.selectedItems()
