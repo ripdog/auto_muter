@@ -22,7 +22,6 @@ from sdbus import (  # type: ignore
 )
 
 
-# --- Configuration ---
 def get_config_path() -> str:
     xdg_config_home = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
     return os.path.join(xdg_config_home, "auto_muter", "config.json")
@@ -42,15 +41,13 @@ def load_config() -> dict:
                 json.dump(default_config, f, indent=4)
             return default_config
     except Exception as e:
-        # Before logger is fully initialized, we can just print or we'll rely on it later
-        print(f"Error loading config {config_path}: {e}")
+        logger.warning(f"Error loading config {config_path}: {e}")
         return default_config
 
 
 DBUS_SERVICE_NAME_SDBUS_STR = "com.example.FocusAudioManager"
 DBUS_OBJECT_PATH_SDBUS_STR = "/com/example/FocusAudioManager"
 
-# --- Logging Setup ---
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -152,7 +149,6 @@ class AudioManager(
     def _get_audio_streams_info(self):
         pactl_output = self._run_command(["pactl", "list", "sink-inputs"])
         if not pactl_output:
-            logger.warning("Failed to get 'pactl list sink-inputs' output.")
             return []
 
         streams_details = []
@@ -168,7 +164,6 @@ class AudioManager(
             match_sink_input = sink_input_re.match(line)
             if match_sink_input:
                 if current_stream_info and "id" in current_stream_info:
-                    # Final check for required fields before appending
                     if (
                         "pid" in current_stream_info
                         and (
@@ -178,15 +173,11 @@ class AudioManager(
                         and "is_muted" in current_stream_info
                     ):
                         streams_details.append(current_stream_info)
-                    else:
-                        logger.debug(
-                            f"Skipping incomplete stream for Sink Input ID {current_stream_info.get('id')}: {current_stream_info}"
-                        )
                 current_stream_info = {"id": match_sink_input.group(1)}
                 continue
 
             if not current_stream_info:
-                continue  # Ensure we are within a sink input block
+                continue
 
             match_mute = mute_re.search(line)
             if match_mute:
@@ -204,7 +195,7 @@ class AudioManager(
             if match_app_name:
                 current_stream_info["app_name"] = match_app_name.group(1).lower()
 
-        if current_stream_info and "id" in current_stream_info:  # Add last stream
+        if current_stream_info and "id" in current_stream_info:
             if (
                 "pid" in current_stream_info
                 and (
@@ -214,12 +205,7 @@ class AudioManager(
                 and "is_muted" in current_stream_info
             ):
                 streams_details.append(current_stream_info)
-            else:
-                logger.debug(
-                    f"Skipping incomplete stream for last Sink Input ID {current_stream_info.get('id')}: {current_stream_info}"
-                )
 
-        logger.debug(f"Processed stream details from pactl: {streams_details}")
         return streams_details
 
     def _set_stream_mute(self, stream_id: str, mute_flag: bool):
@@ -231,9 +217,7 @@ class AudioManager(
 
     @dbus_method_async(input_signature="i", result_signature="")
     async def UpdateFocus(self, pid: int) -> None:
-        # logger.info(f"D-Bus UpdateFocus called with PID: {pid}")
         if self._current_focused_pid == pid:
-            logger.debug(f"Focus unchanged (PID {pid}), no action needed.")
             return
         self._current_focused_pid = pid
         await asyncio.get_event_loop().run_in_executor(
@@ -243,28 +227,16 @@ class AudioManager(
     def _apply_audio_rules_sync(self):
         streams = self._get_audio_streams_info()
         if not streams:
-            logger.warning(
-                "No audio sink inputs found by pactl to manage in _apply_audio_rules_sync."
-            )
             return
         focused_pid_str = str(self._current_focused_pid)
-        logger.debug(
-            f"Applying rules. Current focused PID: {focused_pid_str}. Configured apps: {self._configured_process_names_lower}"
-        )
 
         for stream in streams:
             stream_id = stream["id"]
             stream_pid = stream["pid"]
-            stream_binary_name_lower = stream.get(
-                "binary_name", ""
-            )  # Default to empty string if not present
-            stream_app_name_lower = stream.get(
-                "app_name", ""
-            )  # Default to empty string if not present
+            stream_binary_name_lower = stream.get("binary_name", "")
+            stream_app_name_lower = stream.get("app_name", "")
             stream_is_muted = stream["is_muted"]
 
-            # Inclusive-OR match: check if EITHER binary_name OR app_name is in configured list
-            # Ensure names are not empty before checking
             is_configured_app_by_binary = any(
                 conf_name in stream_binary_name_lower
                 for conf_name in self._configured_process_names_lower
@@ -283,46 +255,27 @@ class AudioManager(
                 is_stream_focused = (stream_pid == focused_pid_str) and (
                     self._current_focused_pid != -1
                 )
-                logger.debug(
-                    f"Sink Input #{stream_id} (PID {stream_pid}, Binary '{stream_binary_name_lower}', AppName '{stream_app_name_lower}'): Configured. Focused: {is_stream_focused}. Muted: {stream_is_muted}"
-                )
                 if is_stream_focused:
                     if stream_is_muted:
                         self._set_stream_mute(stream_id, False)
-                    else:
-                        logger.debug(
-                            f"Sink Input #{stream_id} focused and already unmuted."
-                        )
                 else:
                     if not stream_is_muted:
                         self._set_stream_mute(stream_id, True)
-                    else:
-                        logger.debug(
-                            f"Sink Input #{stream_id} not focused and already muted."
-                        )
-            else:
-                logger.debug(
-                    f"Sink Input #{stream_id} (Binary '{stream_binary_name_lower}', AppName '{stream_app_name_lower}') is not in configured list. Skipping."
-                )
 
     @dbus_method_async(input_signature="", result_signature="s")
     async def Ping(self) -> str:
-        logger.info("D-Bus Ping received by AudioManager")
         return "Pong from FocusAudioManager (sdbus/pactl)"
 
     async def initial_mute_task(self):
-        logger.info("Performing initial mute of configured applications (3s delay).")
         original_focused_pid = self._current_focused_pid
         self._current_focused_pid = -1
         await asyncio.get_event_loop().run_in_executor(
             None, self._apply_audio_rules_sync
         )
         self._current_focused_pid = original_focused_pid
-        logger.info("Initial mute task completed.")
 
 
 async def main_async():
-    logger.info("Starting FocusAudioManager with python-sdbus and pactl...")
     if (
         subprocess.run(["which", "pactl"], capture_output=True, text=True).returncode
         != 0
@@ -336,34 +289,24 @@ async def main_async():
     object_path_str = DBUS_OBJECT_PATH_SDBUS_STR
 
     audio_manager_instance.export_to_dbus(object_path_str)
-    logger.info(f"Object exported to D-Bus at path {object_path_str}")
-
     await request_default_bus_name_async(DBUS_SERVICE_NAME_SDBUS_STR)
-    logger.info(f"D-Bus service name '{DBUS_SERVICE_NAME_SDBUS_STR}' acquired.")
 
     loop = asyncio.get_event_loop()
     loop.call_later(
         1, lambda: asyncio.create_task(audio_manager_instance.initial_mute_task())
     )
 
-    logger.info(
-        "FocusAudioManager (sdbus/pactl) started. Waiting for D-Bus calls or Ctrl+C to exit."
-    )
     stop_event = asyncio.Event()
     try:
         await stop_event.wait()
     except KeyboardInterrupt:
-        logger.info(
-            "KeyboardInterrupt received during stop_event.wait(), shutting down..."
-        )
+        pass
     except asyncio.CancelledError:
-        logger.info("Main task cancelled, shutting down...")
-    finally:
-        logger.info("FocusAudioManager (sdbus/pactl) stopped.")
+        pass
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main_async())
     except KeyboardInterrupt:
-        logger.info("Application terminated by user (Ctrl+C at top level).")
+        pass
