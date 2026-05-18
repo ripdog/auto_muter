@@ -227,6 +227,107 @@ class AudioManager(
             pass
         return ""
 
+    def _get_process_info(self, pid: str):
+        try:
+            with open(f"/proc/{pid}/status", "r", encoding="utf-8") as f:
+                status_lines = f.readlines()
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                cmdline = f.read().replace(b"\0", b" ").decode(
+                    "utf-8", errors="replace"
+                )
+        except Exception:
+            return None
+
+        process_info = {"pid": pid, "ppid": "", "name": "", "cmdline": cmdline}
+        for line in status_lines:
+            key, _, value = line.partition(":")
+            value = value.strip()
+            if key == "Name":
+                process_info["name"] = value
+            elif key == "PPid":
+                process_info["ppid"] = value
+
+        return process_info
+
+    def _get_process_ancestors(self, pid: str):
+        ancestors = []
+        seen_pids = set()
+        current_pid = pid
+
+        for _ in range(128):
+            if not current_pid or current_pid in seen_pids:
+                break
+
+            seen_pids.add(current_pid)
+            process_info = self._get_process_info(current_pid)
+            if not process_info:
+                break
+
+            ancestors.append(process_info)
+            parent_pid = process_info.get("ppid", "")
+            if not parent_pid or parent_pid == "0":
+                break
+
+            current_pid = parent_pid
+
+        return ancestors
+
+    def _is_broad_common_ancestor(self, process_info: dict) -> bool:
+        process_name = process_info.get("name", "").lower()
+        cmdline = process_info.get("cmdline", "").lower()
+
+        if process_info.get("pid") in {"1"}:
+            return True
+
+        broad_process_names = {
+            "bash",
+            "bwrap",
+            "fish",
+            "kwin_wayland",
+            "kwin_x11",
+            "plasmashell",
+            "sh",
+            "steam",
+            "steamwebhelper",
+            "systemd",
+            "zsh",
+        }
+        if process_name in broad_process_names:
+            return True
+
+        return "/steam/steam.sh" in cmdline or "app-steam@autostart.service" in cmdline
+
+    def _are_processes_related_by_specific_ancestor(
+        self, stream_pid: str, focused_pid: str
+    ) -> bool:
+        stream_ancestors = self._get_process_ancestors(stream_pid)
+        focused_ancestors = self._get_process_ancestors(focused_pid)
+        if not stream_ancestors or not focused_ancestors:
+            return False
+
+        stream_ancestor_by_pid = {
+            process_info["pid"]: process_info for process_info in stream_ancestors
+        }
+
+        for focused_ancestor in focused_ancestors:
+            common_ancestor = stream_ancestor_by_pid.get(focused_ancestor["pid"])
+            if not common_ancestor:
+                continue
+
+            if self._is_broad_common_ancestor(common_ancestor):
+                return False
+
+            logger.debug(
+                "Matched stream PID %s to focused PID %s via common ancestor %s (%s)",
+                stream_pid,
+                focused_pid,
+                common_ancestor.get("pid"),
+                common_ancestor.get("name"),
+            )
+            return True
+
+        return False
+
     @dbus_method_async(input_signature="i", result_signature="")
     async def UpdateFocus(self, pid: int) -> None:
         logger.info(f"UpdateFocus called with pid: {pid}")
@@ -270,13 +371,8 @@ class AudioManager(
                     if stream_pid == focused_pid_str:
                         is_stream_focused = True
                     else:
-                        # Check if they share the same systemd cgroup (fixes Wine/Proton games)
-                        stream_cgroup = self._get_process_cgroup(stream_pid)
-                        focused_cgroup = self._get_process_cgroup(focused_pid_str)
-                        if (
-                            stream_cgroup
-                            and focused_cgroup
-                            and stream_cgroup == focused_cgroup
+                        if self._are_processes_related_by_specific_ancestor(
+                            stream_pid, focused_pid_str
                         ):
                             is_stream_focused = True
 
