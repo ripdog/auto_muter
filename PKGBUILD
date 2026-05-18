@@ -1,6 +1,6 @@
 # Maintainer: ripdog
 pkgname=auto-muter-git
-pkgver=r12.d974057
+pkgver=r16.bb1c3fc
 pkgrel=1
 pkgdesc="Auto mutes specific applications when they lose focus"
 arch=('any')
