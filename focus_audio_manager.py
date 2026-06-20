@@ -164,9 +164,12 @@ class AudioManager(
             match_sink_input = sink_input_re.match(line)
             if match_sink_input:
                 if current_stream_info and "id" in current_stream_info:
+                    # Include stream if it has is_muted and at least one
+                    # identifying name (app_name or binary_name).
+                    # pid is optional - some apps (e.g. SDL-based) don't set
+                    # application.process.id on the sink-input node.
                     if (
-                        "pid" in current_stream_info
-                        and (
+                        (
                             "binary_name" in current_stream_info
                             or "app_name" in current_stream_info
                         )
@@ -197,8 +200,7 @@ class AudioManager(
 
         if current_stream_info and "id" in current_stream_info:
             if (
-                "pid" in current_stream_info
-                and (
+                (
                     "binary_name" in current_stream_info
                     or "app_name" in current_stream_info
                 )
@@ -346,7 +348,7 @@ class AudioManager(
 
         for stream in streams:
             stream_id = stream["id"]
-            stream_pid = stream["pid"]
+            stream_pid = stream.get("pid", "")
             stream_binary_name_lower = stream.get("binary_name", "")
             stream_app_name_lower = stream.get("app_name", "")
             stream_is_muted = stream["is_muted"]
@@ -367,7 +369,10 @@ class AudioManager(
 
             if is_configured_app:
                 is_stream_focused = False
-                if self._current_focused_pid != -1:
+                # Only attempt PID-based focus matching if the stream has a PID.
+                # Some apps (e.g. SDL-based) don't set application.process.id
+                # on the sink-input node.
+                if stream_pid and self._current_focused_pid != -1:
                     if stream_pid == focused_pid_str:
                         is_stream_focused = True
                     else:
@@ -375,6 +380,26 @@ class AudioManager(
                             stream_pid, focused_pid_str
                         ):
                             is_stream_focused = True
+
+                # Fallback: if the stream lacks a PID (e.g. SDL apps),
+                # match by process name of the focused window.
+                if not is_stream_focused and not stream_pid and self._current_focused_pid != -1:
+                    focused_info = self._get_process_info(focused_pid_str)
+                    if focused_info:
+                        focused_name = focused_info.get("name", "").lower()
+                        focused_cmdline = focused_info.get("cmdline", "").lower()
+                        is_stream_focused = (
+                            (stream_app_name_lower and focused_name and stream_app_name_lower in focused_name)
+                            or (stream_app_name_lower and focused_cmdline and stream_app_name_lower in focused_cmdline)
+                            or (stream_binary_name_lower and focused_name and stream_binary_name_lower in focused_name)
+                            or (stream_binary_name_lower and focused_cmdline and stream_binary_name_lower in focused_cmdline)
+                        )
+                        if is_stream_focused:
+                            logger.debug(
+                                "Matched stream %s (no PID) to focused PID %s via process name",
+                                stream_app_name_lower or stream_binary_name_lower,
+                                focused_pid_str,
+                            )
 
                 if is_stream_focused:
                     if stream_is_muted:
