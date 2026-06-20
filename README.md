@@ -1,6 +1,6 @@
 # auto_muter
 
-`auto_muter` is a Linux desktop utility designed to automatically mute specified applications when their windows lose focus, and unmute them when they regain focus. It leverages KDE Plasma's KWin window manager and PulseAudio/PipeWire (via `pactl`) to seamlessly manage audio streams.
+`auto_muter` is a Linux desktop utility designed to automatically mute specified applications when their windows lose focus, and unmute them when they regain focus. It leverages KDE Plasma's KWin window manager and native PipeWire tooling (`pw-dump` and `wpctl`) to seamlessly manage audio streams.
 
 This is particularly useful for games or applications that do not have a built-in "mute on background" feature, preventing them from playing audio when you Alt-Tab away to do something else.
 
@@ -9,14 +9,14 @@ This is particularly useful for games or applications that do not have a built-i
 The utility consists of two main parts that communicate via D-Bus:
 
 1.  **KWin Script (`auto_muter_kwin/`)**: Runs inside the KDE Plasma window manager. It monitors window activation events and sends the Process ID (PID) of the currently focused window over D-Bus.
-2.  **Python Background Service (`focus_audio_manager.py`)**: A daemon that listens for D-Bus messages from the KWin script. When focus changes, it uses `pactl` to check all active audio streams. If an audio stream belongs to an application in the configuration list, it mutes the stream if the application is not focused, and unmutes it if it is focused.
+2.  **Python Background Service (`focus_audio_manager.py`)**: A daemon that listens for D-Bus messages from the KWin script. When focus changes, it uses `pw-dump` to check all active PipeWire streams. If an audio stream belongs to an application in the configuration list, it uses `wpctl` to mute the stream if the application is not focused, and unmute it if it is focused.
 
 ## Requirements
 
 *   **Linux** with **KDE Plasma** (Wayland or X11)
 *   **Python 3.8+**
 *   **uv** (Python package installer and runner)
-*   **PulseAudio** or **PipeWire-Pulse** (`pactl` must be available in your PATH)
+*   **PipeWire** and **WirePlumber** (`pw-dump` and `wpctl` must be available in your PATH)
 *   `libsystemd-dev` (or equivalent package for your distribution, required for building `sdbus`)
 
 ## Installation
@@ -68,7 +68,7 @@ If you installed via the PKGBUILD, the unit file is already installed to `/usr/l
 
 ```ini
 [Unit]
-Description=Focus-based Application Audio Manager (sdbus/pactl)
+Description=Focus-based Application Audio Manager (sdbus/PipeWire)
 After=graphical-session.target
 
 [Service]
@@ -109,12 +109,12 @@ Alternatively, you can manually edit the configuration file at `~/.config/auto_m
 }
 ```
 
-The matching is case-insensitive and acts as a substring match against either the binary name or the application name reported by PulseAudio.
+The configured application matching is case-insensitive and acts as a substring match against either the binary name or the application name reported by PipeWire. Focus matching is PID-based: the stream PID must match the focused window PID directly, or through a specific shared process ancestor for launchers such as Wine/Proton.
 
 **Auto-reloading:** The daemon watches this file using `inotify`. Whenever you save changes to `config.json` (either manually or via the GUI), the new rules will be applied instantly without needing to restart the service.
 
 ## Troubleshooting
 
 *   **No sound muting?** Check the Python service logs: `journalctl --user -u focus_audio_manager.service -f`
-*   **"pactl command not found"**: Ensure `pulseaudio-utils` (or the equivalent package containing `pactl`) is installed on your system.
+*   **"Required PipeWire command(s) not found"**: Ensure `pipewire` and `wireplumber` (or the equivalent packages containing `pw-dump` and `wpctl`) are installed on your system.
 *   **KWin script not running?** Check KDE Plasma logs using `journalctl --user -f | grep kwin`

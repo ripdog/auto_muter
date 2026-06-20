@@ -1,12 +1,12 @@
 # Maintainer: ripdog
 pkgname=auto-muter-git
-pkgver=r16.bb1c3fc
+pkgver=r19.48806f0
 pkgrel=1
 pkgdesc="Auto mutes specific applications when they lose focus"
 arch=('any')
 url="https://github.com/ripdog/auto_muter"
 license=('MIT')
-depends=('python' 'python-sdbus' 'python-asyncinotify' 'libpulse' 'pyside6')
+depends=('python' 'python-sdbus' 'python-asyncinotify' 'pipewire' 'wireplumber' 'pyside6')
 makedepends=('git')
 provides=('auto-muter')
 conflicts=('auto-muter')

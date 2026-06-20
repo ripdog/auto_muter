@@ -1,5 +1,5 @@
 [Unit]
-Description=Focus-based Application Audio Manager (sdbus/pactl)
+Description=Focus-based Application Audio Manager (sdbus/PipeWire)
 After=graphical-session.target
 
 [Service]

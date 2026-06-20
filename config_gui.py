@@ -10,7 +10,6 @@ import sys
 import json
 import os
 import subprocess
-import re
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -36,27 +35,48 @@ def get_config_path() -> str:
 
 
 def get_active_audio_apps() -> set:
-    """Fetch currently active audio applications from pactl."""
+    """Fetch currently active audio applications from PipeWire."""
     apps = set()
     try:
         result = subprocess.run(
-            ["pactl", "list", "sink-inputs"], capture_output=True, text=True, check=True
+            ["pw-dump"], capture_output=True, text=True, check=True
         )
-        pactl_output = result.stdout
+        pipewire_objects = json.loads(result.stdout)
 
-        binary_re = re.compile(r'application\.process\.binary\s*=\s*"([^"]+)"')
-        app_name_re = re.compile(r'application\.name\s*=\s*"([^"]+)"')
+        clients_by_id = {}
+        for pipewire_object in pipewire_objects:
+            if pipewire_object.get("type") != "PipeWire:Interface:Client":
+                continue
 
-        for line in pactl_output.splitlines():
-            line = line.strip()
+            client_id = str(pipewire_object.get("id", ""))
+            props = pipewire_object.get("info", {}).get("props", {})
+            if client_id and isinstance(props, dict):
+                clients_by_id[client_id] = props
 
-            match_binary = binary_re.search(line)
-            if match_binary:
-                apps.add(match_binary.group(1))
+        for pipewire_object in pipewire_objects:
+            if pipewire_object.get("type") != "PipeWire:Interface:Node":
+                continue
 
-            match_app_name = app_name_re.search(line)
-            if match_app_name:
-                apps.add(match_app_name.group(1))
+            props = pipewire_object.get("info", {}).get("props", {})
+            if not isinstance(props, dict):
+                continue
+
+            media_class = props.get("media.class", "")
+            if "stream" not in str(media_class).lower():
+                continue
+
+            client_props = clients_by_id.get(str(props.get("client.id", "")), {})
+            binary_name = props.get("application.process.binary") or client_props.get(
+                "application.process.binary"
+            )
+            app_name = props.get("application.name") or client_props.get(
+                "application.name"
+            )
+
+            if binary_name:
+                apps.add(str(binary_name))
+            if app_name:
+                apps.add(str(app_name))
 
     except Exception as e:
         print(f"Error fetching active audio apps: {e}")
@@ -67,7 +87,6 @@ def get_active_audio_apps() -> set:
         "plasma-workspace",
         "pipewire",
         "wireplumber",
-        "pulseaudio",
     }
     return {app for app in apps if app.lower() not in ignored_apps and app.strip()}
 
