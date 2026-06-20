@@ -9,7 +9,7 @@
 
 import logging
 import os
-import re
+import shutil
 import subprocess
 import json
 import asyncio
@@ -53,7 +53,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler()],
 )
-logger = logging.getLogger("FocusAudioManagerSDBusPactl")
+logger = logging.getLogger("FocusAudioManagerSDBusPipeWire")
 
 
 class AudioManager(
@@ -61,7 +61,7 @@ class AudioManager(
     interface_name=DBUS_SERVICE_NAME_SDBUS_STR,  # type: ignore
 ):
     """
-    Manages audio streams for configured applications based on window focus using pactl.
+    Manages audio streams for configured applications based on window focus using PipeWire.
     Exposed on D-Bus using python-sdbus.
     """
 
@@ -95,7 +95,7 @@ class AudioManager(
             if initial:
                 logger.info(f"Loaded config from {self.config_path}")
                 logger.info(
-                    f"Managing audio for process/app names (using pactl): {self._configured_process_names_lower}"
+                    f"Managing audio for process/app names (using PipeWire): {self._configured_process_names_lower}"
                 )
             else:
                 logger.info(f"Configuration reloaded from {self.config_path}")
@@ -142,92 +142,95 @@ class AudioManager(
             logger.error(f"Command '{' '.join(command)}' timed out after {timeout}s.")
         except FileNotFoundError:
             logger.error(
-                f"Command '{command[0]}' not found. Is 'pactl' installed and in PATH?"
+                f"Command '{command[0]}' not found. Is it installed and in PATH?"
             )
         return None
 
+    def _get_wpctl_mute_state(self, stream_id: str):
+        wpctl_output = self._run_command(["wpctl", "get-volume", stream_id])
+        if wpctl_output is None:
+            return None
+
+        return "[MUTED]" in wpctl_output
+
     def _get_audio_streams_info(self):
-        pactl_output = self._run_command(["pactl", "list", "sink-inputs"])
-        if not pactl_output:
+        pw_dump_output = self._run_command(["pw-dump"])
+        if not pw_dump_output:
             return []
 
+        try:
+            pipewire_objects = json.loads(pw_dump_output)
+        except json.JSONDecodeError as e:
+            logger.error(f"Unable to parse pw-dump output as JSON: {e}")
+            return []
+
+        clients_by_id = {}
+        for pipewire_object in pipewire_objects:
+            if pipewire_object.get("type") != "PipeWire:Interface:Client":
+                continue
+
+            client_id = str(pipewire_object.get("id", ""))
+            props = pipewire_object.get("info", {}).get("props", {})
+            if client_id and isinstance(props, dict):
+                clients_by_id[client_id] = props
+
         streams_details = []
-        current_stream_info = {}
-        sink_input_re = re.compile(r"Sink Input #(\d+)")
-        mute_re = re.compile(r"Mute: (yes|no)")
-        pid_re = re.compile(r"application\.process\.id = \"(\d+)\"")
-        binary_re = re.compile(r"application\.process\.binary = \"([^\"]+)\"")
-        app_name_re = re.compile(r"application\.name = \"([^\"]+)\"")
-
-        for line in pactl_output.splitlines():
-            line = line.strip()
-            match_sink_input = sink_input_re.match(line)
-            if match_sink_input:
-                if current_stream_info and "id" in current_stream_info:
-                    # Include stream if it has is_muted and at least one
-                    # identifying name (app_name or binary_name).
-                    # pid is optional - some apps (e.g. SDL-based) don't set
-                    # application.process.id on the sink-input node.
-                    if (
-                        (
-                            "binary_name" in current_stream_info
-                            or "app_name" in current_stream_info
-                        )
-                        and "is_muted" in current_stream_info
-                    ):
-                        streams_details.append(current_stream_info)
-                current_stream_info = {"id": match_sink_input.group(1)}
+        for pipewire_object in pipewire_objects:
+            if pipewire_object.get("type") != "PipeWire:Interface:Node":
                 continue
 
-            if not current_stream_info:
+            props = pipewire_object.get("info", {}).get("props", {})
+            if not isinstance(props, dict):
                 continue
 
-            match_mute = mute_re.search(line)
-            if match_mute:
-                current_stream_info["is_muted"] = match_mute.group(1).lower() == "yes"
+            media_class = props.get("media.class", "")
+            if "stream" not in str(media_class).lower():
+                continue
 
-            match_pid = pid_re.search(line)
-            if match_pid:
-                current_stream_info["pid"] = match_pid.group(1)
+            stream_id = str(pipewire_object.get("id", ""))
+            if not stream_id:
+                continue
 
-            match_binary = binary_re.search(line)
-            if match_binary:
-                current_stream_info["binary_name"] = match_binary.group(1).lower()
+            client_props = clients_by_id.get(str(props.get("client.id", "")), {})
+            pid = props.get("application.process.id") or client_props.get(
+                "application.process.id"
+            ) or client_props.get("pipewire.sec.pid")
+            binary_name = props.get("application.process.binary") or client_props.get(
+                "application.process.binary"
+            )
+            app_name = props.get("application.name") or client_props.get(
+                "application.name"
+            )
 
-            match_app_name = app_name_re.search(line)
-            if match_app_name:
-                current_stream_info["app_name"] = match_app_name.group(1).lower()
+            stream_info = {
+                "id": stream_id,
+                "is_muted": self._get_wpctl_mute_state(stream_id),
+                "media_class": str(media_class),
+                "media_name": str(
+                    props.get("media.name") or props.get("node.name") or ""
+                ),
+            }
+            if pid:
+                stream_info["pid"] = str(pid)
+            if binary_name:
+                stream_info["binary_name"] = str(binary_name).lower()
+            if app_name:
+                stream_info["app_name"] = str(app_name).lower()
 
-        if current_stream_info and "id" in current_stream_info:
             if (
-                (
-                    "binary_name" in current_stream_info
-                    or "app_name" in current_stream_info
-                )
-                and "is_muted" in current_stream_info
+                stream_info["is_muted"] is not None
+                and ("binary_name" in stream_info or "app_name" in stream_info)
             ):
-                streams_details.append(current_stream_info)
+                streams_details.append(stream_info)
 
         return streams_details
 
     def _set_stream_mute(self, stream_id: str, mute_flag: bool):
         mute_command_val = "1" if mute_flag else "0"
         logger.info(
-            f"{'Muting' if mute_flag else 'Unmuting'} Sink Input ID: #{stream_id}"
+            f"{'Muting' if mute_flag else 'Unmuting'} PipeWire Node ID: {stream_id}"
         )
-        self._run_command(["pactl", "set-sink-input-mute", stream_id, mute_command_val])
-
-    def _get_process_cgroup(self, pid: str) -> str:
-        try:
-            with open(f"/proc/{pid}/cgroup", "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.startswith("0::"):
-                        cgroup = line.strip().split("::", 1)[1]
-                        if ".service" in cgroup or ".scope" in cgroup:
-                            return cgroup
-        except Exception:
-            pass
-        return ""
+        self._run_command(["wpctl", "set-mute", stream_id, mute_command_val])
 
     def _get_process_info(self, pid: str):
         try:
@@ -369,9 +372,6 @@ class AudioManager(
 
             if is_configured_app:
                 is_stream_focused = False
-                # Only attempt PID-based focus matching if the stream has a PID.
-                # Some apps (e.g. SDL-based) don't set application.process.id
-                # on the sink-input node.
                 if stream_pid and self._current_focused_pid != -1:
                     if stream_pid == focused_pid_str:
                         is_stream_focused = True
@@ -381,25 +381,12 @@ class AudioManager(
                         ):
                             is_stream_focused = True
 
-                # Fallback: if the stream lacks a PID (e.g. SDL apps),
-                # match by process name of the focused window.
-                if not is_stream_focused and not stream_pid and self._current_focused_pid != -1:
-                    focused_info = self._get_process_info(focused_pid_str)
-                    if focused_info:
-                        focused_name = focused_info.get("name", "").lower()
-                        focused_cmdline = focused_info.get("cmdline", "").lower()
-                        is_stream_focused = (
-                            (stream_app_name_lower and focused_name and stream_app_name_lower in focused_name)
-                            or (stream_app_name_lower and focused_cmdline and stream_app_name_lower in focused_cmdline)
-                            or (stream_binary_name_lower and focused_name and stream_binary_name_lower in focused_name)
-                            or (stream_binary_name_lower and focused_cmdline and stream_binary_name_lower in focused_cmdline)
-                        )
-                        if is_stream_focused:
-                            logger.debug(
-                                "Matched stream %s (no PID) to focused PID %s via process name",
-                                stream_app_name_lower or stream_binary_name_lower,
-                                focused_pid_str,
-                            )
+                if not stream_pid:
+                    logger.debug(
+                        "Skipping configured stream %s because PipeWire did not expose a process PID",
+                        stream_app_name_lower or stream_binary_name_lower or stream_id,
+                    )
+                    continue
 
                 if is_stream_focused:
                     if stream_is_muted:
@@ -410,7 +397,7 @@ class AudioManager(
 
     @dbus_method_async(input_signature="", result_signature="s")
     async def Ping(self) -> str:
-        return "Pong from FocusAudioManager (sdbus/pactl)"
+        return "Pong from FocusAudioManager (sdbus/PipeWire)"
 
     async def initial_mute_task(self):
         original_focused_pid = self._current_focused_pid
@@ -422,12 +409,13 @@ class AudioManager(
 
 
 async def main_async():
-    if (
-        subprocess.run(["which", "pactl"], capture_output=True, text=True).returncode
-        != 0
-    ):
+    missing_commands = [
+        command for command in ("pw-dump", "wpctl") if shutil.which(command) is None
+    ]
+    if missing_commands:
         logger.error(
-            "'pactl' command not found. Please install it (usually part of pulseaudio-utils or similar package)."
+            "Required PipeWire command(s) not found in PATH: %s",
+            ", ".join(missing_commands),
         )
         return
 
